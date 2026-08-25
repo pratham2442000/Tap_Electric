@@ -1,6 +1,12 @@
+import os, sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+
 import unittest
 from PIL import Image
 from app.ml.inference import EVSEInferenceEngine
+
 
 class TestInferenceEngine(unittest.TestCase):
     def test_engine_extraction(self):

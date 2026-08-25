@@ -84,9 +84,16 @@ class EVSETrainingPipeline:
         if not TRAINING_AVAILABLE or self.engine.model is None:
             raise RuntimeError("Training dependencies or model not initialized.")
 
+        # Support both modern eval_strategy and legacy evaluation_strategy
+        eval_strategy_kwargs = {}
+        try:
+            Seq2SeqTrainingArguments(output_dir="tmp", eval_strategy="steps")
+            eval_strategy_kwargs["eval_strategy"] = "steps"
+        except (TypeError, ValueError):
+            eval_strategy_kwargs["evaluation_strategy"] = "steps"
+
         training_args = Seq2SeqTrainingArguments(
             predict_with_generate=True,
-            evaluation_strategy="steps",
             per_device_train_batch_size=batch_size,
             per_device_eval_batch_size=batch_size,
             fp16=torch.cuda.is_available(),
@@ -100,8 +107,10 @@ class EVSETrainingPipeline:
             load_best_model_at_end=True,
             metric_for_best_model="cer",
             greater_is_better=False,
-            save_total_limit=2
+            save_total_limit=2,
+            **eval_strategy_kwargs
         )
+
 
         trainer = Seq2SeqTrainer(
             model=self.engine.model,

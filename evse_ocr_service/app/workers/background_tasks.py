@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 from app.schemas.telemetry import ScanTelemetry
 from app.core.storage import get_storage_service
-from app.core.database import SessionLocal
+from app.core import database
 from app.db.repositories.scan_repository import ScanRepository
 from app.validation.format_validator import EVSEFormatValidator
 from app.core.logging import logger
@@ -33,10 +33,11 @@ async def persist_scan_data(
             is_valid = val_res["is_valid"]
             
         # 3. Persist to PostgreSQL database
-        if SessionLocal:
-            db = SessionLocal()
+        if database.SessionLocal:
+            db = database.SessionLocal()
             try:
                 repo = ScanRepository(db)
+
                 repo.create_scan_event(
                     event_id=uuid.UUID(trace_id),
                     timestamp_utc=meta.timestamp_utc,

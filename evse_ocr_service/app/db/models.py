@@ -2,19 +2,19 @@ from datetime import datetime
 import uuid
 
 try:
-    from sqlalchemy import Column, String, Float, DateTime, Boolean, Integer, ForeignKey, JSON
-    from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
+    from sqlalchemy import Column, String, Float, DateTime, Boolean, Integer, ForeignKey, JSON, Uuid
     from sqlalchemy.orm import relationship
     from app.core.database import Base
     
-    UUIDType = PG_UUID(as_uuid=True)
-    JSONType = JSONB
+    UUIDType = Uuid(as_uuid=True)
+    JSONType = JSON
 except ImportError:
     Base = object
-    Column = String = Float = DateTime = Boolean = Integer = ForeignKey = JSON = None
+    Column = String = Float = DateTime = Boolean = Integer = ForeignKey = JSON = Uuid = None
     relationship = None
     UUIDType = None
     JSONType = None
+
 
 if Base is not object:
     class ScanEvent(Base):
