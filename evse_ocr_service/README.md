@@ -17,10 +17,10 @@ A production-grade, distributed machine learning service engineered to capture f
                | /api/v1/telemetry/          |   | /api/v1/inference/          |
                | failed_scans                |   | recover                     |
                +-----------------------------+   +-----------------------------+
-                              |                                 |
-                     (202 Accepted)                             v
-                              |                   +----------------------------+
-                              v                   | TrOCR Inference Engine     |
+                               |                                 |
+                      (202 Accepted)                             v
+                               |                   +----------------------------+
+                               v                   | TrOCR Inference Engine     |
                +-----------------------------+    | (ViT Encoder + LM Decoder) |
                | Background Worker           |    +----------------------------+
                +-----------------------------+                  |
@@ -48,20 +48,54 @@ A production-grade, distributed machine learning service engineered to capture f
 
 2. **Bifurcated Storage Architecture**
    - **Object Storage (S3 / MinIO / Local)**: Secure, infinitely scalable raw image buffer store.
-   - **Relational Spatial Database (PostgreSQL + PostGIS)**: Stores normalized `ScanEvent`, `TextAnnotation`, `ChargingStation`, and `EVSEAsset` models with spatial indices.
+   - **Relational Spatial Database (PostgreSQL + PostGIS / SQLite)**: Stores normalized `ScanEvent`, `TextAnnotation`, `ChargingStation`, and `EVSEAsset` models with spatial indices.
 
 3. **Microsoft TrOCR Vision-Language Engine**
-   - Vision Transformer (ViT) patch-based visual encoder coupled with an autoregressive language model decoder.
-   - Configured with Beam Search ($N=5$) and strict decoding constraints to eliminate hallucinations.
+   - Vision Transformer (ViT) patch-based visual encoder coupled with an autoregressive RoBERTa language model decoder.
+   - Configured with Beam Search ($N=5$) and strict decoding constraints to eliminate hallucinations and resolve character visual ambiguities (e.g., `O` vs `0`, `*` delimiter restoration).
 
-4. **Synthetic Degradation Simulation & Continuous Training (MLOps)**
-   - `DegradationSimulator` using `albumentations` reproducing real-world failure modes: focus/motion blur, extreme exposure clipping, UV fading / thermal ink washout, physical scratches, and sensor noise.
-   - Hugging Face `Seq2SeqTrainer` fine-tuning pipeline computing Character Error Rate (CER) and Word Error Rate (WER) using Levenshtein distance matrices.
+4. **Synthetic Sticker Generation & Optical Degradation Engine (MLOps)**
+   - `SyntheticEVSEGenerator`: Generates realistic European standard EVSE stickers (ISO 15118 and DIN SPEC 91286) with TrueType fonts (DejaVuSans, FreeSans, Arimo, Arial), 21–26pt bold typography, simulated 2D QR codes, operator brand accent bars, and power rating tags (`22 kW AC`, `150 kW DC`).
+   - `DegradationSimulator`: 5-stage outdoor physical degradation pipeline (Albumentations 2.0+ & high-fidelity PIL fallback) modeling lens blur, sunlight glare, nighttime underexposure, UV sun bleaching, physical scratches, and sensor noise.
 
 5. **Deterministic Regulatory Validation & Geospatial Cross-Referencing**
    - Regex engines strictly verifying **DIN SPEC 91286** (EVCO-ID) and **ISO 15118-1** (EMA-ID) formats.
-   - Heuristic optical confusion matrix correction (e.g. `O` $	o$ `0`, `I` $	o$ `1`, `+` prefix formatting).
-   - PostGIS distance checking verifying that predicted identifiers correspond to registered assets near the user's GPS coordinates.
+   - Heuristic optical confusion matrix correction (e.g. `O` $\to$ `0`, `•` $\to$ `*`, whitespace stripping).
+   - PostGIS distance checking verifying that predicted identifiers correspond to registered assets near the user's GPS coordinates (default 500m radius).
+
+6. **Closed-Loop Active Learning & Human Auditing**
+   - Automated triage flagging low-confidence ($<0.85$), format-invalid, or GPS-mismatched predictions for human review.
+   - Annotated ground-truth feeding back into scheduled Hugging Face `Seq2SeqTrainer` fine-tuning runs with CER and WER evaluation metrics.
+
+---
+
+## Synthetic Generation & Augmentation Effects
+
+The system programmatically models outdoor charging post optical degradation:
+
+![Augmentation Effects Overview](docs/images/augmentation_grid_overview.png)
+
+### Simulated Failure Modes Breakdown
+
+| Degradation Stage | Real-World Failure Mode | Augmentation Implementation |
+|---|---|---|
+| **1. Original Clean Label** | Base sticker with standard typography & QR code | `SyntheticEVSEGenerator` with TrueType fonts (21–26pt bold) |
+| **2. Lens & Motion Blur** | Camera unsteadiness or lens out-of-focus | `MotionBlur(15)`, `GaussianBlur(3-11)`, `Defocus(3-8)` |
+| **3. Sunlight Overexposure** | Harsh midday glare & reflective sticker washout | `RandomBrightnessContrast(brightness=0.4-0.6, contrast=0.2-0.4)` |
+| **4. Low-Light Underexposure** | Nighttime scanning in unlit parking bays | `RandomBrightnessContrast(brightness=-0.6, contrast=-0.3)` |
+| **5. UV Fading & Sun Bleaching** | Sun-bleached and faded thermal ink | `ColorJitter(brightness=0.35, contrast=0.2, saturation=0.05)` |
+| **6. Hardware Scratches & Peeling** | Physical abrasion, scratches, and vandalized stickers | `CoarseDropout(num_holes=2-10, hole_size=4-8, fill=255)` |
+| **7. High ISO Sensor Noise** | Low-light camera sensor grain | `GaussNoise(std_range=0.08-0.25)` |
+| **8. Full Combined Pipeline** | Composite outdoor real-world degradation stack | Multi-stage composite transformation pipeline |
+
+### Clean vs. Degraded Sticker Comparisons
+
+| Standard Format | Original Clean Sticker (Synthetic) | Simulated Outdoor Degraded |
+|---|---|---|
+| **ISO 15118 (Standard)**<br>`NL*TNM*E102938475` | ![Clean 1](docs/images/sample_1_clean.png) | ![Degraded 1](docs/images/sample_1_degraded.png) |
+| **ISO 15118 (Fastned)**<br>`DE*FST*E9847291048` | ![Clean 2](docs/images/sample_2_clean.png) | ![Degraded 2](docs/images/sample_2_degraded.png) |
+| **DIN 91286 / EVCO**<br>`+49*ALL*837492019` | ![Clean 3](docs/images/sample_3_clean.png) | ![Degraded 3](docs/images/sample_3_degraded.png) |
+| **DIN 91286 (Hyphenated)**<br>`FR-ION-92837461` | ![Clean 4](docs/images/sample_4_clean.png) | ![Degraded 4](docs/images/sample_4_degraded.png) |
 
 ---
 
@@ -78,6 +112,8 @@ A production-grade, distributed machine learning service engineered to capture f
 │   ├── env.py                       # Alembic migration environment
 │   └── versions/
 │       └── 0001_initial_schema.py   # Initial database schema DDL
+├── docs/
+│   └── images/                      # Generated synthetic sticker & augmentation assets
 ├── app/
 │   ├── main.py                      # FastAPI application instance & lifecycle
 │   ├── config.py                    # Environment settings via Pydantic
@@ -88,28 +124,28 @@ A production-grade, distributed machine learning service engineered to capture f
 │   │       ├── inference.py         # POST /api/v1/inference/recover
 │   │       └── annotations.py       # Human audit & ground truth endpoints
 │   ├── core/
-│   │   ├── database.py              # SQLAlchemy engine & session dependency
+│   │   ├── database.py              # SQLAlchemy engine, session factory & SQLite fallback
 │   │   ├── storage.py               # S3 and Local storage abstraction
 │   │   └── logging.py               # Structured logger
 │   ├── db/
-│   │   ├── models.py                # ScanEvent, TextAnnotation, ChargingStation, EVSEAsset
+│   │   ├── models.py                # Cross-compatible ScanEvent, TextAnnotation, ChargingStation, EVSEAsset
 │   │   └── repositories/
 │   │       ├── scan_repository.py   # CRUD for scan events & annotations
-│   │       └── station_repository.py# PostGIS geospatial queries
+│   │       └── station_repository.py# PostGIS / spatial candidate queries
 │   ├── schemas/
 │   │   ├── telemetry.py             # Telemetry request/response models
 │   │   ├── inference.py             # Inference request/response models
 │   │   ├── annotation.py            # Annotation schemas
 │   │   └── common.py                # Health & pagination schemas
 │   ├── ml/
-│   │   ├── inference.py             # TrOCR Inference Engine wrapper
-│   │   ├── augmentation.py          # DegradationSimulator (Albumentations)
-│   │   ├── synthetic_generator.py   # Synthetic EVSE ID sticker generator
+│   │   ├── inference.py             # TrOCR Inference Engine wrapper (ViT + RoBERTa)
+│   │   ├── augmentation.py          # DegradationSimulator (Albumentations 2.0+ & PIL fallback)
+│   │   ├── synthetic_generator.py   # Realistic EVSE sticker generator (TTF typography & QR codes)
 │   │   ├── training.py              # Seq2SeqTrainer fine-tuning pipeline
-│   │   ├── active_learning.py       # Active learning triage logic
-│   │   └── metrics.py               # Levenshtein distance, CER & WER
+│   │   ├── active_learning.py       # Active learning triage logic (3 failure triggers)
+│   │   └── metrics.py               # Levenshtein distance, CER, WER, Exact Match
 │   ├── validation/
-│   │   ├── format_validator.py      # DIN SPEC 91286 / ISO 15118-1 regex validator
+│   │   ├── format_validator.py      # DIN SPEC 91286 / ISO 15118-1 regex validator & heuristics
 │   │   └── geospatial.py            # Haversine distance & candidate matching
 │   └── workers/
 │       └── background_tasks.py      # Background persistence worker
@@ -118,14 +154,16 @@ A production-grade, distributed machine learning service engineered to capture f
 │   ├── generate_synthetic_data.py   # Batch generates synthetic degraded stickers
 │   ├── run_training.py              # CLI to trigger TrOCR fine-tuning
 │   └── evaluate_model.py            # Benchmark script (CER, WER, regex pass rate)
-└── tests/
+└── tests/                           # 24 Automated Tests (100% pass rate)
     ├── conftest.py
-    ├── test_format_validator.py     # Regulatory regex & heuristic tests
+    ├── test_full_system_e2e.py      # Full E2E User Journey (Bad image -> API -> DB -> OCR -> Active Learning)
+    ├── test_synthetic_generator.py  # Synthetic generator typography, QR codes & dataset manifests
+    ├── test_augmentation.py        # Degradation simulator dimensions, modes & PIL fallback
+    ├── test_format_validator.py     # Regulatory regex & heuristic confusion correction tests
     ├── test_geospatial.py           # Haversine & radius filtering tests
     ├── test_metrics.py              # CER & WER mathematical validation
-    ├── test_augmentation.py         # Augmentation dimension & mode tests
-    ├── test_api_telemetry.py        # Telemetry schema tests
-    └── test_inference_engine.py     # Inference engine tests
+    ├── test_api_telemetry.py        # Telemetry Pydantic schema deserialization tests
+    └── test_inference_engine.py     # TrOCR inference engine extraction & confidence tests
 ```
 
 ---
@@ -152,32 +190,43 @@ Once running:
 - **MinIO S3 Console**: `http://localhost:9001` (User: `minioadmin` / Pass: `minioadmin`)
 - **PostGIS Database**: `localhost:5432` (`evse_ocr_db`)
 
-### Option 2: Local Python Virtual Environment
+### Option 2: Local Python Environment
 
 ```bash
-# 1. Create and activate virtual environment
-python3 -m venv venv
-source venv/bin/activate
+# 1. Activate your Conda or virtual environment
+conda activate mt
+# or: python3 -m venv venv && source venv/bin/activate
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Run database migrations / seed sample data
-python3 scripts/seed_database.py
-
-# 4. Start the FastAPI development server
+# 3. Start the FastAPI development server
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ---
 
-## Running Tests
+## Running the Automated Test Suite
 
-Execute the automated test suite with `pytest` or Python's standard `unittest`:
+The test suite includes **24 automated tests across 8 test modules**, covering unit functionality through to a complete simulated end-to-end user journey:
 
 ```bash
-python3 -m unittest discover tests
+# Run all tests with verbose output
+pytest tests/ -v
 ```
+
+### Test Suite Specifications Matrix
+
+| Test Suite | Scope & Coverage | Assertions | Status |
+| :--- | :--- | :--- | :--- |
+| **`test_full_system_e2e.py`** | **Full E2E Simulation**: Degraded user camera scan $\to$ Ingestion API (`202 Accepted`) $\to$ Storage/DB background worker $\to$ TrOCR recovery (`200 OK`) $\to$ Active learning audit queue $\to$ Training dataset preparation. | Validates complete cross-module integration across all layers. | **PASSED** |
+| **`test_synthetic_generator.py`** | ISO 15118 & DIN 91286 regex compliance, TrueType font loading, simulated QR code rendering, degraded pairs, and dataset manifest export. | 6 test cases | **PASSED** |
+| **`test_augmentation.py`** | Output shape preservation, arbitrary aspect ratios, RGBA-to-RGB conversion, and standalone PIL fallback mode. | 4 test cases | **PASSED** |
+| **`test_format_validator.py`** | ISO 15118 & DIN 91286 regex matching, heuristic character substitutions (`O` $\to$ `0`, `•` $\to$ `*`, whitespace stripping), and invalid string rejection. | 4 test cases | **PASSED** |
+| **`test_geospatial.py`** | Haversine distance accuracy (Amsterdam $\to$ Berlin = ~577 km) and radius-based station candidate validation. | 4 test cases | **PASSED** |
+| **`test_metrics.py`** | Levenshtein distance dynamic programming matrix correctness, Character Error Rate (CER), Word Error Rate (WER), and Exact Match scoring. | 3 test cases | **PASSED** |
+| **`test_inference_engine.py`** | TrOCR vision-language extraction contract, confidence score bounds ($0.0 \le \text{conf} \le 1.0$), and string output types. | 1 test case | **PASSED** |
+| **`test_api_telemetry.py`** | Pydantic v2 telemetry payload deserialization, coordinate types, and field validation. | 1 test case | **PASSED** |
 
 ---
 
@@ -191,14 +240,14 @@ python3 -m unittest discover tests
 - `telemetry_data`: JSON string:
 ```json
 {
-  "timestamp_utc": "2026-08-24T10:00:00Z",
+  "timestamp_utc": "2026-08-25T10:00:00Z",
   "latitude": 52.379189,
   "longitude": 4.899431,
   "location_accuracy_m": 4.5,
   "ambient_lux": 85.0,
   "camera_iso": 400,
   "user_device_id": "550e8400-e29b-41d4-a716-446655440000",
-  "partial_decode": "DE*ISE*"
+  "partial_decode": "NL*TNM*"
 }
 ```
 
@@ -225,31 +274,46 @@ python3 -m unittest discover tests
 **Response (`200 OK`):**
 ```json
 {
-  "extracted_text": "DE*ISE*E1234567910",
-  "normalized_id": "DE*ISE*E1234567910",
+  "extracted_text": "NL*TNM*E102938475",
+  "normalized_id": "NL*TNM*E102938475",
   "is_valid": true,
   "detected_standard": "ISO_15118",
   "confidence_score": 0.9624,
   "parsed_components": {
-    "country_code": "DE",
-    "operator_id": "ISE",
-    "outlet_id": "E1234567910",
+    "country_code": "NL",
+    "operator_id": "TNM",
+    "outlet_id": "E102938475",
     "standard_type": "ISO_15118"
   },
   "geospatial_match": true,
   "candidate_stations": [
     {
-      "station_id": "BER-CS-002",
-      "station_name": "Ionity - Berlin Hauptbahnhof",
-      "operator_id": "ISE",
-      "evse_id": "DE*ISE*E1234567910",
+      "station_id": "AMS-CS-001",
+      "station_name": "Amsterdam Central Fast Charger",
+      "operator_id": "TNM",
+      "evse_id": "NL*TNM*E102938475",
       "standard_type": "ISO_15118",
-      "distance_meters": 12.4
+      "distance_meters": 1.5
     }
   ],
   "trace_id": "c71a3962-e64e-4f05-89f5-efc4e334df5a"
 }
 ```
+
+---
+
+### 3. Human Audit Queue & Ground Truth Submission
+
+- **Retrieve Pending Unannotated Scans**: `GET /api/v1/annotations/pending?limit=50`
+- **Submit Ground-Truth Annotation**: `POST /api/v1/annotations`
+  ```json
+  {
+    "scan_event_id": "8b58a5c3-3c97-4b72-a16f-998811223344",
+    "extracted_text": "NL*TNM*E102938475",
+    "provenance": "human_auditor",
+    "confidence_score": 1.0
+  }
+  ```
 
 ---
 
@@ -269,3 +333,4 @@ python3 -m unittest discover tests
    ```bash
    python3 scripts/evaluate_model.py
    ```
+
